@@ -156,6 +156,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);min-hei
 
 @keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 .rep-card,.campaign-card{animation:fadeUp .2s ease both}
+
+/* CAMPAIGN FLAGS */
+.camp-flags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.camp-flag{font-family:var(--font-body);font-size:10px;font-weight:500;padding:3px 10px;border-radius:20px;display:flex;align-items:center;gap:4px}
+.flag-HOT{background:var(--ok-dim);color:var(--ok);border:1px solid var(--ok-border)}
+.flag-COLD{background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)}
+.flag-WATCH{background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber-border)}
+.flag-icon{font-size:11px}
 </style>
 </head>
 <body>
@@ -196,6 +204,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-body);min-hei
     <div class="sidebar-divider"></div>
     <div class="sidebar-heading">Campaigns</div>
     <button class="filter-btn" data-filter="top10" onclick="setFilter('top10',this)">🏆 Top 10 Converters <span class="filter-count">10</span></button>
+    <button class="filter-btn" data-filter="hot" onclick="setFilter('hot',this)">🟢 Hot — Double Down <span class="filter-count" id="cnt-hot">—</span></button>
+    <button class="filter-btn" data-filter="cold" onclick="setFilter('cold',this)">🔴 Cold — Wasted Effort <span class="filter-count" id="cnt-cold">—</span></button>
+    <button class="filter-btn" data-filter="watch" onclick="setFilter('watch',this)">🟡 Watch — Keep an Eye <span class="filter-count" id="cnt-watch">—</span></button>
     <button class="filter-btn" data-filter="zero" onclick="setFilter('zero',this)">⚠️ Zero Conversions <span class="filter-count" id="cnt-zero">—</span></button>
   </div>
 
@@ -249,6 +260,85 @@ let currentView = 'scorecard';
 
 // Boot immediately
 boot();
+
+// ══════════════════════════════════════════════════════════════════
+// CAMPAIGN FLAG ENGINE
+// ══════════════════════════════════════════════════════════════════
+function flagCampaign(c) {
+  const months = CAMP_DATA.summary.months;
+  const flags = [];
+  const avgCVR = CAMP_DATA.summary.overall_cvr;
+
+  // Get recent months with data
+  const recentMonths = months.slice(-3);
+  const recentCVRs = recentMonths.map(m => {
+    const del = c.monthly_delivered[m] || 0;
+    const conv = c.monthly_conversions[m] || 0;
+    return del > 0 ? (conv / del * 100) : null;
+  }).filter(v => v !== null);
+
+  const lastMonthDel = c.monthly_delivered[months[months.length - 1]] || 0;
+  const lastMonthConv = c.monthly_conversions[months[months.length - 1]] || 0;
+  const prevMonthDel = c.monthly_delivered[months[months.length - 2]] || 0;
+  const prevMonthConv = c.monthly_conversions[months[months.length - 2]] || 0;
+
+  // Count active months (months with deliveries)
+  const activeMonths = months.filter(m => (c.monthly_delivered[m] || 0) > 0).length;
+
+  // HOT FLAGS (green)
+  if (c.overall_cvr >= avgCVR * 2 && c.total_conversions >= 3) {
+    flags.push({ type: 'HOT', label: 'CVR 2x+ above average', detail: `${c.overall_cvr.toFixed(3)}% vs ${avgCVR.toFixed(3)}% avg` });
+  }
+  if (recentCVRs.length >= 2) {
+    const trending = recentCVRs.every((v, i) => i === 0 || v >= recentCVRs[i - 1]);
+    if (trending && recentCVRs[recentCVRs.length - 1] > 0) {
+      flags.push({ type: 'HOT', label: 'CVR trending up', detail: 'Improving over last 3 months' });
+    }
+  }
+  if (c.total_delivered >= 1000 && c.total_conversions >= 5) {
+    flags.push({ type: 'HOT', label: 'Proven at scale', detail: `${c.total_conversions} signed from ${c.total_delivered.toLocaleString()} delivered` });
+  }
+  if (activeMonths <= 2 && c.total_conversions >= 3) {
+    flags.push({ type: 'HOT', label: 'Strong early results', detail: `${c.total_conversions} conversions in just ${activeMonths} month${activeMonths > 1 ? 's' : ''}` });
+  }
+
+  // COLD FLAGS (red)
+  if (c.total_delivered >= 500 && c.total_conversions === 0) {
+    flags.push({ type: 'COLD', label: 'High volume, zero conversions', detail: `${c.total_delivered.toLocaleString()} sent with no signed contracts` });
+  }
+  if (recentCVRs.length >= 2) {
+    const declining = recentCVRs.every((v, i) => i === 0 || v <= recentCVRs[i - 1]);
+    if (declining && recentCVRs[0] > 0 && recentCVRs[recentCVRs.length - 1] === 0) {
+      flags.push({ type: 'COLD', label: 'CVR dropped to zero', detail: 'Was converting but stopped recently' });
+    }
+  }
+  if (activeMonths >= 4 && c.total_conversions === 0 && c.total_delivered >= 200) {
+    flags.push({ type: 'COLD', label: 'Long-running with no results', detail: `Active ${activeMonths} months, ${c.total_delivered.toLocaleString()} delivered, 0 signed` });
+  }
+  // Dormant: had activity in early months but none in last 2
+  const last2Active = months.slice(-2).some(m => (c.monthly_delivered[m] || 0) > 0);
+  const early_active = months.slice(0, -2).some(m => (c.monthly_delivered[m] || 0) > 0);
+  if (!last2Active && early_active && c.total_conversions === 0) {
+    flags.push({ type: 'COLD', label: 'Campaign went dormant', detail: 'No sends in the last 2 months' });
+  }
+
+  // WATCH FLAGS (amber)
+  if (activeMonths <= 2 && c.total_conversions === 0 && c.total_delivered >= 50) {
+    flags.push({ type: 'WATCH', label: 'New campaign — too early to call', detail: `Only ${activeMonths} month${activeMonths > 1 ? 's' : ''} of data` });
+  }
+  if (c.total_delivered < 100 && c.overall_cvr > avgCVR * 3 && c.total_conversions >= 1) {
+    flags.push({ type: 'WATCH', label: 'High CVR but low volume', detail: `${c.overall_cvr.toFixed(1)}% CVR on only ${c.total_delivered} delivered — could be a fluke` });
+  }
+  if (recentCVRs.length >= 3) {
+    const max = Math.max(...recentCVRs);
+    const min = Math.min(...recentCVRs);
+    if (max > 0 && (max - min) / max > 0.8) {
+      flags.push({ type: 'WATCH', label: 'Volatile CVR', detail: 'Big swings month to month — unstable performance' });
+    }
+  }
+
+  return flags;
+}
 
 // ══════════════════════════════════════════════════════════════════
 // HELPERS
@@ -356,6 +446,9 @@ function renderCampaigns(){
   if(currentFilter==='sms') campaigns=campaigns.filter(c=>c.types.includes('sms')&&!c.types.includes('email'));
   if(currentFilter==='top10') campaigns=campaigns.slice(0,10);
   if(currentFilter==='zero') campaigns=campaigns.filter(c=>c.total_conversions===0);
+  if(currentFilter==='hot') campaigns=campaigns.filter(c=>flagCampaign(c).some(f=>f.type==='HOT'));
+  if(currentFilter==='cold') campaigns=campaigns.filter(c=>flagCampaign(c).some(f=>f.type==='COLD'));
+  if(currentFilter==='watch') campaigns=campaigns.filter(c=>flagCampaign(c).some(f=>f.type==='WATCH'));
 
   // Trend chart
   const trends=CAMP_DATA.monthly_trends;
@@ -407,11 +500,20 @@ function renderCampaigns(){
         <div class="msg-val">${m.total_conversions}</div>
       </div>`).join('');
 
+    const campFlags = flagCampaign(c);
+    const flagIcons = { HOT: '🟢', COLD: '🔴', WATCH: '🟡' };
+    const flagsHtml = campFlags.length > 0 
+      ? `<div class="camp-flags">${campFlags.map(f => 
+          `<span class="camp-flag flag-${f.type}" title="${f.detail}"><span class="flag-icon">${flagIcons[f.type]}</span>${f.label}</span>`
+        ).join('')}</div>` 
+      : '';
+
     html+=`<div class="campaign-card" id="camp-${i}" onclick="toggleCamp(${i})" style="animation-delay:${i*20}ms">
       <div class="camp-row">
         <div>
           <div class="camp-name">${c.campaign}</div>
           <div class="camp-meta">${c.messages} messages · ${c.types.join(' + ')} · ${c.total_delivered.toLocaleString()} delivered</div>
+          ${flagsHtml}
         </div>
         <div class="camp-badges">
           <div class="sparkline">${sparkBars}</div>
@@ -509,6 +611,9 @@ function updateCounts(){
   document.getElementById('cnt-email').textContent=camps.filter(c=>c.types.includes('email')).length;
   document.getElementById('cnt-sms').textContent=camps.filter(c=>c.types.includes('sms')).length;
   document.getElementById('cnt-zero').textContent=camps.filter(c=>c.total_conversions===0).length;
+  document.getElementById('cnt-hot').textContent=camps.filter(c=>flagCampaign(c).some(f=>f.type==='HOT')).length;
+  document.getElementById('cnt-cold').textContent=camps.filter(c=>flagCampaign(c).some(f=>f.type==='COLD')).length;
+  document.getElementById('cnt-watch').textContent=camps.filter(c=>flagCampaign(c).some(f=>f.type==='WATCH')).length;
 }
 
 // ══════════════════════════════════════════════════════════════════
